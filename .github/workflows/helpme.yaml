@@ -1,237 +1,237 @@
 name: DevSecOps Pipeline
 on:
   push:
-    branches: [ main ]
+    branches: [main]
   pull_request:
-    branches: [ main ]
+    branches: [main]
 
 # TODO#0: DONE — Declare workflow permissions.
 # Each permission is scoped to only what this workflow needs (Principle of Least Privilege).
 # Giving repo-wide write access is dangerous: if one job is compromised, the attacker
 # can access every resource. Per-workflow permissions limit the blast radius.
 permissions:
-  contents: read            # read source code
-  security-events: write    # TODO#0a: upload SARIF files to GitHub Security tab
-  pull-requests: write      # TODO#0b: allow Gitleaks/Sonar to comment on PRs
-  issues: write             # TODO#0b: allow commenting on issues
-  id-token: write           # TODO#0c: OIDC token for cloud auth
-  actions: read             # read workflow run info
+  contents: read # read source code
+  security-events: write # TODO#0a: upload SARIF files to GitHub Security tab
+  pull-requests: write # TODO#0b: allow Gitleaks/Sonar to comment on PRs
+  issues: write # TODO#0b: allow commenting on issues
+  id-token: write # TODO#0c: OIDC token for cloud auth
+  actions: read # read workflow run info
 
 jobs:
-    # GATE#0: Secret scanning (TruffleHog + Gitleaks)
-    secret-scanning:
-        runs-on: ubuntu-latest
-        steps:
-            - name: Checkout code
-              uses: actions/checkout@v4
-              with:
-                # TODO#1: DONE — fetch-depth: 0 fetches the ENTIRE git history.
-                # Secret scanners need full history because a developer may have committed
-                # a secret (e.g. API key) in an old commit and then deleted it later.
-                # If we only fetch the latest commit (default fetch-depth: 1),
-                # those old secrets are invisible to the scanner.
-                fetch-depth: 0
+  # GATE#0: Secret scanning (TruffleHog + Gitleaks)
+  secret-scanning:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          # TODO#1: DONE — fetch-depth: 0 fetches the ENTIRE git history.
+          # Secret scanners need full history because a developer may have committed
+          # a secret (e.g. API key) in an old commit and then deleted it later.
+          # If we only fetch the latest commit (default fetch-depth: 1),
+          # those old secrets are invisible to the scanner.
+          fetch-depth: 0
 
-            - name: Run TruffleHog
-              uses: trufflesecurity/trufflehog@main
-              continue-on-error: true
-              with:
-                path: ./
-                # TODO#2: DONE — scan only the diff between base branch and HEAD
-                # This avoids re-scanning the entire history on every push (faster).
-                base: ${{ github.event.repository.default_branch }}
-                head: HEAD
-                # TODO#3: DONE — --only-verified means TruffleHog will only report secrets
-                # it can CONFIRM are live by actually testing them against the service.
-                # This dramatically reduces false positives (noise).
-                extra_args: --only-verified
+      - name: Run TruffleHog
+        uses: trufflesecurity/trufflehog@main
+        continue-on-error: true
+        with:
+          path: ./
+          # TODO#2: DONE — scan only the diff between base branch and HEAD
+          # This avoids re-scanning the entire history on every push (faster).
+          base: ${{ github.event.repository.default_branch }}
+          head: HEAD
+          # TODO#3: DONE — --only-verified means TruffleHog will only report secrets
+          # it can CONFIRM are live by actually testing them against the service.
+          # This dramatically reduces false positives (noise).
+          extra_args: --only-verified
 
-            # TODO#4: DONE — Gitleaks step
-            # Q: TruffleHog verifies live creds → fewer false positives, but may MISS secrets
-            #    whose service is down or that use unknown patterns.
-            #    Gitleaks uses regex patterns → MORE false positives (it flags anything that
-            #    LOOKS like a secret, even if it's a test dummy), but it MISSES fewer patterns
-            #    since it casts a wider net.
-            - name: Run Gitleaks
-              uses: gitleaks/gitleaks-action@v2
-              continue-on-error: true
-              env:
-                GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-                GITLEAKS_ENABLE_UPLOAD_ARTIFACT: true   # upload SARIF as artifact
-                GITLEAKS_ENABLE_SUMMARY: true           # show summary in job log
+      # TODO#4: DONE — Gitleaks step
+      # Q: TruffleHog verifies live creds → fewer false positives, but may MISS secrets
+      #    whose service is down or that use unknown patterns.
+      #    Gitleaks uses regex patterns → MORE false positives (it flags anything that
+      #    LOOKS like a secret, even if it's a test dummy), but it MISSES fewer patterns
+      #    since it casts a wider net.
+      - name: Run Gitleaks
+        uses: gitleaks/gitleaks-action@v2
+        continue-on-error: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITLEAKS_ENABLE_UPLOAD_ARTIFACT: true # upload SARIF as artifact
+          GITLEAKS_ENABLE_SUMMARY: true # show summary in job log
 
-    # GATE#1a: SAST via SonarQube
-    sast-scan:
-        runs-on: ubuntu-latest
-        needs: secret-scanning
-        if: ${{ !cancelled() }}
-        steps:
-            - name: Checkout code
-              uses: actions/checkout@v4
-              with:
-                # TODO#5: DONE — SonarCloud uses git blame to identify which commits
-                # introduced new issues ("new code" period). Without full history,
-                # every line looks "new" and blame data is wrong.
-                fetch-depth: 0
+  # GATE#1a: SAST via SonarQube
+  sast-scan:
+    runs-on: ubuntu-latest
+    needs: secret-scanning
+    if: ${{ !cancelled() }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          # TODO#5: DONE — SonarCloud uses git blame to identify which commits
+          # introduced new issues ("new code" period). Without full history,
+          # every line looks "new" and blame data is wrong.
+          fetch-depth: 0
 
-            # TODO#6: DONE — SonarQube scan step
-            # Q: Findings show up in the SonarCloud DASHBOARD (sonarcloud.io), NOT in the
-            #    GitHub Security tab. This is because SonarCloud sends results directly to
-            #    its own platform via the SONAR_TOKEN. It does NOT output a SARIF file and
-            #    does NOT use github/codeql-action/upload-sarif. The GitHub Security tab
-            #    only shows findings uploaded via the upload-sarif action.
-            - name: SonarQube Scan
-              uses: SonarSource/sonarqube-scan-action@v7.1.0
-              continue-on-error: true
-              env:
-                SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+      # TODO#6: DONE — SonarQube scan step
+      # Q: Findings show up in the SonarCloud DASHBOARD (sonarcloud.io), NOT in the
+      #    GitHub Security tab. This is because SonarCloud sends results directly to
+      #    its own platform via the SONAR_TOKEN. It does NOT output a SARIF file and
+      #    does NOT use github/codeql-action/upload-sarif. The GitHub Security tab
+      #    only shows findings uploaded via the upload-sarif action.
+      - name: SonarQube Scan
+        uses: SonarSource/sonarqube-scan-action@v7.1.0
+        continue-on-error: true
+        env:
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
 
-    # GATE#1b: SAST via CodeQL (results in GitHub Security tab)
-    codeql-scan:
-        runs-on: ubuntu-latest
-        needs: secret-scanning
-        if: ${{ !cancelled() }}
-        strategy:
-            matrix:
-                # TODO#7: DONE — Next.js and React are written in JavaScript/TypeScript.
-                # CodeQL treats JavaScript and TypeScript as ONE language called 'javascript'.
-                # Using 'typescript' separately would cause a collision (see TODO#9 Q below).
-                language: [ 'javascript' ]
-        steps:
-            - name: Checkout code
-              uses: actions/checkout@v4
+  # GATE#1b: SAST via CodeQL (results in GitHub Security tab)
+  codeql-scan:
+    runs-on: ubuntu-latest
+    needs: secret-scanning
+    if: ${{ !cancelled() }}
+    strategy:
+      matrix:
+        # TODO#7: DONE — Next.js and React are written in JavaScript/TypeScript.
+        # CodeQL treats JavaScript and TypeScript as ONE language called 'javascript'.
+        # Using 'typescript' separately would cause a collision (see TODO#9 Q below).
+        language: ["javascript"]
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
 
-            - name: Initialize CodeQL
-              uses: github/codeql-action/init@v3
-              with:
-                languages: ${{ matrix.language }}
-                # TODO#8: DONE — use BOTH query suites
-                # security-extended     → adds more OWASP/CWE vuln checks on top of defaults
-                # security-and-quality  → everything in security-extended PLUS code quality
-                #                         rules (dead code, bad practices that lead to bugs)
-                # Q: Why both? security-extended catches more vulnerabilities.
-                #    security-and-quality catches both vulnerabilities AND code smells that
-                #    could become security issues later. Using both gives maximum coverage.
-                queries: security-extended,security-and-quality
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@v3
+        with:
+          languages: ${{ matrix.language }}
+          # TODO#8: DONE — use BOTH query suites
+          # security-extended     → adds more OWASP/CWE vuln checks on top of defaults
+          # security-and-quality  → everything in security-extended PLUS code quality
+          #                         rules (dead code, bad practices that lead to bugs)
+          # Q: Why both? security-extended catches more vulnerabilities.
+          #    security-and-quality catches both vulnerabilities AND code smells that
+          #    could become security issues later. Using both gives maximum coverage.
+          queries: security-extended,security-and-quality
 
-            # TODO#9: DONE — analyze step with category
-            # Q: If 'javascript' AND 'typescript' both ran as separate matrix jobs, they
-            #    would both try to upload results under the SAME category in the Security tab,
-            #    causing the second upload to OVERWRITE the first (or GitHub rejects it).
-            #    The `category` field namespaces results by language to prevent this collision.
-            - name: Perform CodeQL Analysis
-              uses: github/codeql-action/analyze@v3
-              with:
-                category: "/language:${{ matrix.language }}"
+      # TODO#9: DONE — analyze step with category
+      # Q: If 'javascript' AND 'typescript' both ran as separate matrix jobs, they
+      #    would both try to upload results under the SAME category in the Security tab,
+      #    causing the second upload to OVERWRITE the first (or GitHub rejects it).
+      #    The `category` field namespaces results by language to prevent this collision.
+      - name: Perform CodeQL Analysis
+        uses: github/codeql-action/analyze@v3
+        with:
+          category: "/language:${{ matrix.language }}"
 
-    # GATE#2: Dependency scanning via OWASP Dependency-Check
-    dependency-scanning:
-        runs-on: ubuntu-latest
-        needs: [sast-scan, secret-scanning]
-        if: ${{ !cancelled() }}
-        steps:
-            - name: Checkout code
-              uses: actions/checkout@v4
+  # GATE#2: Dependency scanning via OWASP Dependency-Check
+  dependency-scanning:
+    runs-on: ubuntu-latest
+    needs: [sast-scan, secret-scanning]
+    if: ${{ !cancelled() }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
 
-            # TODO#10: DONE — set up Node 20
-            # Dependency-Check needs Node/npm to resolve the full dependency tree
-            # (including transitive deps) before it can scan them.
-            - name: Set up Node 20
-              uses: actions/setup-node@v4
-              with:
-                node-version: 20
+      # TODO#10: DONE — set up Node 20
+      # Dependency-Check needs Node/npm to resolve the full dependency tree
+      # (including transitive deps) before it can scan them.
+      - name: Set up Node 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
 
-            # TODO#11: DONE — install npm dependencies
-            # `npm ci` is preferred over `npm install` in CI because it:
-            # 1. Uses package-lock.json exactly (reproducible builds)
-            # 2. Fails if package-lock.json is out of sync with package.json
-            # 3. Cleans node_modules before installing (no stale deps)
-            - name: Install dependencies
-              run: npm ci
+      # TODO#11: DONE — install npm dependencies
+      # `npm ci` is preferred over `npm install` in CI because it:
+      # 1. Uses package-lock.json exactly (reproducible builds)
+      # 2. Fails if package-lock.json is out of sync with package.json
+      # 3. Cleans node_modules before installing (no stale deps)
+      - name: Install dependencies
+        run: npm ci
 
-            - name: Depcheck
-              uses: dependency-check/Dependency-Check_Action@main
-              continue-on-error: true
-              id: Depcheck
-              with:
-                project: 'DontEverPushThisCodeV2'
-                path: '.'
-                # TODO#12: DONE — SARIF format integrates with GitHub Security tab.
-                # Other formats (HTML, JSON, XML) are for human reading only and cannot
-                # be uploaded via upload-sarif to appear in the Security tab.
-                format: 'SARIF'
-                out: 'reports'
-                args: >
-                    --failOnCVSS 7
-                    --enableRetired
-                # TODO#13: DONE — CVSS 7.0 is the threshold between MEDIUM (4.0-6.9)
-                # and HIGH (7.0-8.9). Failing on >= 7.0 blocks HIGH and CRITICAL issues
-                # while allowing LOW/MEDIUM through (which may not have patches yet).
+      - name: Depcheck
+        uses: dependency-check/Dependency-Check_Action@main
+        continue-on-error: true
+        id: Depcheck
+        with:
+          project: "DontEverPushThisCodeV2"
+          path: "."
+          # TODO#12: DONE — SARIF format integrates with GitHub Security tab.
+          # Other formats (HTML, JSON, XML) are for human reading only and cannot
+          # be uploaded via upload-sarif to appear in the Security tab.
+          format: "SARIF"
+          out: "reports"
+          args: >
+            --failOnCVSS 7
+            --enableRetired
+          # TODO#13: DONE — CVSS 7.0 is the threshold between MEDIUM (4.0-6.9)
+          # and HIGH (7.0-8.9). Failing on >= 7.0 blocks HIGH and CRITICAL issues
+          # while allowing LOW/MEDIUM through (which may not have patches yet).
 
-            # TODO#14: DONE — upload SARIF to GitHub Security tab
-            - name: Upload Depcheck SARIF to Security tab
-              if: always()
-              uses: github/codeql-action/upload-sarif@v3
-              continue-on-error: true
-              with:
-                sarif_file: reports/dependency-check-report.sarif
-                category: dependency-check
+      # TODO#14: DONE — upload SARIF to GitHub Security tab
+      - name: Upload Depcheck SARIF to Security tab
+        if: always()
+        uses: github/codeql-action/upload-sarif@v3
+        continue-on-error: true
+        with:
+          sarif_file: reports/dependency-check-report.sarif
+          category: dependency-check
 
-            # TODO#15: DONE — upload raw report folder as downloadable artifact
-            - name: Upload Depcheck HTML report as artifact
-              if: always()
-              uses: actions/upload-artifact@v4
-              with:
-                name: depcheck-report
-                path: reports/
+      # TODO#15: DONE — upload raw report folder as downloadable artifact
+      - name: Upload Depcheck HTML report as artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: depcheck-report
+          path: reports/
 
-    # GATE#3: Container/Image scanning via Trivy
-    image-scanning:
-        runs-on: ubuntu-latest
-        needs: [dependency-scanning]
-        if: ${{ !cancelled() }}
-        steps:
-            - name: Checkout code
-              uses: actions/checkout@v4
+  # GATE#3: Container/Image scanning via Trivy
+  image-scanning:
+    runs-on: ubuntu-latest
+    needs: [dependency-scanning]
+    if: ${{ !cancelled() }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
 
-            # TODO#16: DONE — build the Docker image before Trivy can scan it
-            - name: Build Docker Image
-              run: docker build -t my-app:latest .
+      # TODO#16: DONE — build the Docker image before Trivy can scan it
+      - name: Build Docker Image
+        run: docker build -t my-app:latest .
 
-            - name: Trivy Scan
-              uses: aquasecurity/trivy-action@master
-              continue-on-error: true
-              with:
-                image-ref: 'my-app:latest'
-                # TODO#17: DONE — sarif format integrates with GitHub Security tab
-                format: 'sarif'
-                output: 'trivy-results.sarif'
-                # TODO#18: DONE — report only HIGH and CRITICAL
-                # Q: LOW/MEDIUM should NOT block a build because:
-                #   1. Many have no available patch yet — blocking is pointless
-                #   2. Blocking constantly on unactionable issues kills developer velocity
-                #   3. Teams should monitor and remediate LOW/MEDIUM on a schedule,
-                #      not be blocked every pipeline run
-                #   → Block only on HIGH/CRITICAL where risk is concrete and patches usually exist
-                severity: 'HIGH,CRITICAL'
-                # TODO#19: DONE — ignore CVEs with no available fix
-                # Reporting unfixed CVEs creates noise with no actionable outcome.
-                # Developers cannot fix what has no patch. Enable this to reduce noise.
-                ignore-unfixed: true
+      - name: Trivy Scan
+        uses: aquasecurity/trivy-action@master
+        continue-on-error: true
+        with:
+          image-ref: "my-app:latest"
+          # TODO#17: DONE — sarif format integrates with GitHub Security tab
+          format: "sarif"
+          output: "trivy-results.sarif"
+          # TODO#18: DONE — report only HIGH and CRITICAL
+          # Q: LOW/MEDIUM should NOT block a build because:
+          #   1. Many have no available patch yet — blocking is pointless
+          #   2. Blocking constantly on unactionable issues kills developer velocity
+          #   3. Teams should monitor and remediate LOW/MEDIUM on a schedule,
+          #      not be blocked every pipeline run
+          #   → Block only on HIGH/CRITICAL where risk is concrete and patches usually exist
+          severity: "HIGH,CRITICAL"
+          # TODO#19: DONE — ignore CVEs with no available fix
+          # Reporting unfixed CVEs creates noise with no actionable outcome.
+          # Developers cannot fix what has no patch. Enable this to reduce noise.
+          ignore-unfixed: true
 
-            # TODO#20: DONE — upload Trivy SARIF to GitHub Security tab
-            - name: Upload Trivy SARIF to Security tab
-              if: always()
-              uses: github/codeql-action/upload-sarif@v3
-              continue-on-error: true
-              with:
-                sarif_file: trivy-results.sarif
-                category: trivy
+      # TODO#20: DONE — upload Trivy SARIF to GitHub Security tab
+      - name: Upload Trivy SARIF to Security tab
+        if: always()
+        uses: github/codeql-action/upload-sarif@v3
+        continue-on-error: true
+        with:
+          sarif_file: trivy-results.sarif
+          category: trivy
 
-            # TODO#21: DONE — upload raw SARIF as downloadable artifact
-            - name: Upload Trivy results as artifact
-              if: always()
-              uses: actions/upload-artifact@v4
-              with:
-                name: trivy-results
-                path: trivy-results.sarif
+      # TODO#21: DONE — upload raw SARIF as downloadable artifact
+      - name: Upload Trivy results as artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: trivy-results
+          path: trivy-results.sarif
